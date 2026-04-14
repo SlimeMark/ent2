@@ -2,6 +2,13 @@
 #include <ESP32Servo.h>
 #include <M5CoreS3.h>
 #include <esp_camera.h>
+#include <algorithm>
+#include <list>
+#include <memory>
+#include <vector>
+
+#include "human_face_detect_mnp01.hpp"
+#include "human_face_detect_msr01.hpp"
 
 namespace {
 
@@ -28,6 +35,9 @@ Servo servoLeft;
 Servo servoRight;
 uint32_t g_lastLoopMs = 0;
 int g_lastFaceX = -1;
+bool g_detectorReady = false;
+std::unique_ptr<HumanFaceDetectMSR01> g_stage1;
+std::unique_ptr<HumanFaceDetectMNP01> g_stage2;
 
 void writeBothMicroseconds(int leftUs, int rightUs) {
   servoLeft.writeMicroseconds(leftUs);
@@ -79,11 +89,7 @@ void drawStatus(const char* state, int faceX, int errorPx) {
   M5.Display.setCursor(12, 148);
   M5.Display.printf("Deadzone: +/- %d", FACE_DEADZONE_PX);
 
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(12, 200);
-  M5.Display.println("Camera works now; face detect is still a stub.");
-  M5.Display.setCursor(12, 216);
-  M5.Display.println("Replace detectFaceCenterX() with real detection.");
+
 }
 
 bool initCamera() {
@@ -94,12 +100,41 @@ bool initCamera() {
   return true;
 }
 
-// 这里先留成占位函数：
+bool initFaceDetector() {
+  g_stage1.reset(new HumanFaceDetectMSR01(0.1F, 0.5F, 10, 0.2F));
+  g_stage2.reset(new HumanFaceDetectMNP01(0.5F, 0.3F, 5));
+  return g_stage1 != nullptr && g_stage2 != nullptr;
+}
+
+// 实现真正的人脸检测，返回人脸中心 x 坐标
 // -1 表示没检测到人脸
-// 以后可以替换成真正的人脸检测结果（返回人脸中心 x 坐标）
 int detectFaceCenterX(camera_fb_t* fb) {
-  (void)fb;
-  return -1;
+  if (!g_detectorReady || !g_stage1 || !g_stage2 || !fb) {
+    return -1;
+  }
+
+  if (fb->format != PIXFORMAT_RGB565) {
+    return -1;
+  }
+
+  auto &candidates = g_stage1->infer(
+      reinterpret_cast<uint16_t *>(fb->buf),
+      {static_cast<int>(fb->height), static_cast<int>(fb->width), 3});
+  auto &results = g_stage2->infer(
+      reinterpret_cast<uint16_t *>(fb->buf),
+      {static_cast<int>(fb->height), static_cast<int>(fb->width), 3},
+      candidates);
+
+  if (results.empty()) {
+    return -1;
+  }
+
+  // 返回第一个检测到的人脸中心 x 坐标
+  const auto &face = results[0];
+  if (face.box.size() < 4) {
+    return -1;
+  }
+  return (face.box[0] + face.box[2]) / 2;
 }
 
 }  // namespace
@@ -133,6 +168,19 @@ void setup() {
     CoreS3.Display.fillScreen(BLACK);
     CoreS3.Display.setCursor(16, 40);
     CoreS3.Display.println("Camera init failed");
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  CoreS3.Display.setCursor(16, 70);
+  CoreS3.Display.println("Init face detector...");
+  
+  g_detectorReady = initFaceDetector();
+  if (!g_detectorReady) {
+    CoreS3.Display.fillScreen(BLACK);
+    CoreS3.Display.setCursor(16, 40);
+    CoreS3.Display.println("Face detector init failed");
     while (true) {
       delay(1000);
     }
