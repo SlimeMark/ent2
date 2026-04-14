@@ -2,3 +2,5 @@
 .vscode/
 
 .DS_Store
+.trae/
+compile_commands.json
