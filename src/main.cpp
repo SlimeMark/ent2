@@ -1,184 +1,63 @@
 #include <Arduino.h>
-#include <ESP32Servo.h>
-#include <M5CoreS3.h>
-#include <esp_camera.h>
+#include <M5Unified.h>
+
+#include "app_config.h"
+#include "app_state.h"
+#include "audio_capture.h"
+#include "audio_playback.h"
+#include "chat_history.h"
+#include "network_client.h"
+#include "ui_manager.h"
 
 namespace {
 
-constexpr int SERVO_LEFT_PIN = 8;   // DinBase PORT.B
-constexpr int SERVO_RIGHT_PIN = 9;  // DinBase PORT.B
+app::AppState g_appState;
+app::ChatHistory g_chatHistory(app::AppConfig::MAX_HISTORY_MESSAGES);
+app::UIManager g_uiManager(g_appState, g_chatHistory);
+app::AudioCapture g_audioCapture(g_appState);
+app::NetworkClient g_networkClient(g_appState, g_chatHistory);
+app::AudioPlayback g_audioPlayback(g_appState);
 
-constexpr int SERVO_FREQ = 50;
-constexpr int SERVO_MIN_US = 500;
-constexpr int SERVO_MAX_US = 2500;
-constexpr int SERVO_STOP_US = 1500;
-
-// 360° continuous servo 不能直接做角度闭环，
-// 这里只能做“偏一点就短促拨一下”的粗略居中。
-constexpr int SERVO_NUDGE_US = 70;
-constexpr int SERVO_NUDGE_MS = 80;
-constexpr int SERVO_SETTLE_MS = 120;
-
-constexpr int FRAME_WIDTH = 320;
-constexpr int FRAME_HEIGHT = 240;
-constexpr int FACE_DEADZONE_PX = 28;
-constexpr uint32_t LOOP_INTERVAL_MS = 120;
-
-Servo servoLeft;
-Servo servoRight;
-uint32_t g_lastLoopMs = 0;
-int g_lastFaceX = -1;
-
-void writeBothMicroseconds(int leftUs, int rightUs) {
-  servoLeft.writeMicroseconds(leftUs);
-  servoRight.writeMicroseconds(rightUs);
-}
-
-void stopBoth() {
-  writeBothMicroseconds(SERVO_STOP_US, SERVO_STOP_US);
-}
-
-void nudgeLeft() {
-  // 两个舵机同向轻拨，模拟云台向左转一点
-  writeBothMicroseconds(SERVO_STOP_US - SERVO_NUDGE_US,
-                        SERVO_STOP_US - SERVO_NUDGE_US);
-  delay(SERVO_NUDGE_MS);
-  stopBoth();
-  delay(SERVO_SETTLE_MS);
-}
-
-void nudgeRight() {
-  writeBothMicroseconds(SERVO_STOP_US + SERVO_NUDGE_US,
-                        SERVO_STOP_US + SERVO_NUDGE_US);
-  delay(SERVO_NUDGE_MS);
-  stopBoth();
-  delay(SERVO_SETTLE_MS);
-}
-
-void drawStatus(const char* state, int faceX, int errorPx) {
-  M5.Display.fillScreen(BLACK);
-  M5.Display.setTextColor(WHITE, BLACK);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(12, 12);
-  M5.Display.println("CoreS3 Face Track");
-
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(12, 52);
-  M5.Display.printf("State: %s", state);
-
-  M5.Display.setCursor(12, 84);
-  if (faceX >= 0) {
-    M5.Display.printf("Face X: %d", faceX);
-  } else {
-    M5.Display.println("Face X: none");
+[[noreturn]] void haltWithMessage(const char* message) {
+  Serial.println(message);
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setRotation(1);
+  M5.Display.setTextColor(TFT_RED, TFT_BLACK);
+  M5.Display.setCursor(12, 20);
+  M5.Display.print(message);
+  while (true) {
+    delay(1000);
   }
-
-  M5.Display.setCursor(12, 116);
-  M5.Display.printf("Error: %d px", errorPx);
-
-  M5.Display.setCursor(12, 148);
-  M5.Display.printf("Deadzone: +/- %d", FACE_DEADZONE_PX);
-
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(12, 200);
-  M5.Display.println("Camera works now; face detect is still a stub.");
-  M5.Display.setCursor(12, 216);
-  M5.Display.println("Replace detectFaceCenterX() with real detection.");
-}
-
-bool initCamera() {
-  if (!CoreS3.Camera.begin()) {
-    return false;
-  }
-  CoreS3.Camera.sensor->set_framesize(CoreS3.Camera.sensor, FRAMESIZE_QVGA);
-  return true;
-}
-
-// 这里先留成占位函数：
-// -1 表示没检测到人脸
-// 以后可以替换成真正的人脸检测结果（返回人脸中心 x 坐标）
-int detectFaceCenterX(camera_fb_t* fb) {
-  (void)fb;
-  return -1;
 }
 
 }  // namespace
 
 void setup() {
-  auto cfg = M5.config();
-  CoreS3.begin(cfg);
-
   Serial.begin(115200);
   delay(300);
-  Serial.println("CoreS3 camera face-centering scaffold start");
 
-  ESP32PWM::allocateTimer(0);
-  ESP32PWM::allocateTimer(1);
-  ESP32PWM::allocateTimer(2);
-  ESP32PWM::allocateTimer(3);
+  auto cfg = M5.config();
+  M5.begin(cfg);
+  M5.Display.setRotation(1);
+  M5.Display.fillScreen(TFT_BLACK);
 
-  servoLeft.setPeriodHertz(SERVO_FREQ);
-  servoRight.setPeriodHertz(SERVO_FREQ);
-  servoLeft.attach(SERVO_LEFT_PIN, SERVO_MIN_US, SERVO_MAX_US);
-  servoRight.attach(SERVO_RIGHT_PIN, SERVO_MIN_US, SERVO_MAX_US);
-  stopBoth();
+  Serial.println("[BOOT] CoreS3 remote voice terminal starting");
 
-  CoreS3.Display.fillScreen(BLACK);
-  CoreS3.Display.setTextColor(WHITE, BLACK);
-  CoreS3.Display.setTextSize(2);
-  CoreS3.Display.setCursor(16, 40);
-  CoreS3.Display.println("Init camera...");
-
-  if (!initCamera()) {
-    CoreS3.Display.fillScreen(BLACK);
-    CoreS3.Display.setCursor(16, 40);
-    CoreS3.Display.println("Camera init failed");
-    while (true) {
-      delay(1000);
-    }
+  if (!g_appState.begin()) {
+    haltWithMessage("AppState init failed");
+  }
+  if (!g_chatHistory.begin()) {
+    haltWithMessage("ChatHistory init failed");
   }
 
-  drawStatus("Waiting", -1, 0);
+  g_chatHistory.addMessage(
+      app::MessageRole::System,
+      "Ready. Tap Start, speak, wait for server reply, then CoreS3 plays TTS.");
+
+  g_uiManager.startTask();
+  g_audioCapture.startTask();
+  g_networkClient.startTask();
+  g_audioPlayback.startTask();
 }
 
-void loop() {
-  M5.update();
-
-  const uint32_t now = millis();
-  if (now - g_lastLoopMs < LOOP_INTERVAL_MS) {
-    delay(5);
-    return;
-  }
-  g_lastLoopMs = now;
-
-  if (!CoreS3.Camera.get()) {
-    drawStatus("No frame", -1, 0);
-    delay(10);
-    return;
-  }
-
-  camera_fb_t* fb = CoreS3.Camera.fb;
-  const int faceX = detectFaceCenterX(fb);
-  g_lastFaceX = faceX;
-  CoreS3.Camera.free();
-
-  if (faceX < 0) {
-    stopBoth();
-    drawStatus("No face", -1, 0);
-    return;
-  }
-
-  const int frameCenterX = FRAME_WIDTH / 2;
-  const int errorPx = faceX - frameCenterX;
-
-  if (errorPx < -FACE_DEADZONE_PX) {
-    drawStatus("Nudge Left", faceX, errorPx);
-    nudgeLeft();
-  } else if (errorPx > FACE_DEADZONE_PX) {
-    drawStatus("Nudge Right", faceX, errorPx);
-    nudgeRight();
-  } else {
-    stopBoth();
-    drawStatus("Centered", faceX, errorPx);
-  }
-}
+void loop() { vTaskDelay(portMAX_DELAY); }
