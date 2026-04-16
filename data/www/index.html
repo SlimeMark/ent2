@@ -70,6 +70,8 @@ input:focus{outline:none;border-color:#e94560}
 <div class='info-item'><label>IP Address</label><span id='info-ip'>-</span></div>
 <div class='info-item'><label>MAC Address</label><span id='info-mac'>-</span></div>
 <div class='info-item'><label>Device Name</label><span id='info-name'>-</span></div>
+<div class='info-item'><label>WiFi Mode</label><span id='info-mode'>-</span></div>
+<div class='info-item'><label>AP SSID</label><span id='info-ap'>-</span></div>
 <div class='info-item'><label>Free Memory</label><span id='info-heap'>-</span></div>
 <div class='info-item'><label>Firmware</label><span id='info-fw'>-</span></div>
 </div>
@@ -118,10 +120,13 @@ async function loadInfo(){
     if(d.success){var i=d.info;var b=document.getElementById('status-bar');
       if(i.eth_connected){b.className='status-bar ok';b.innerHTML='Ethernet: '+i.ip;}
       else if(i.wifi_connected){b.className='status-bar ok';b.innerHTML='WiFi: '+i.ip;}
-      else{b.className='status-bar err';b.innerHTML='Not connected - Configure WiFi below';}
+      else if(i.ap_active){b.className='status-bar ok';b.innerHTML='Setup AP: '+(i.ap_ssid||'AP');}
+      else{b.className='status-bar err';b.innerHTML='WiFi hidden or reconnecting';}
       document.getElementById('info-ip').textContent=i.ip||'-';
       document.getElementById('info-mac').textContent=i.mac||'-';
       document.getElementById('info-name').textContent=i.device_name||'-';
+      document.getElementById('info-mode').textContent=i.wifi_mode||'-';
+      document.getElementById('info-ap').textContent=(i.ap_active?((i.ap_ssid||'-')+' (visible)'):(i.ap_ssid||'-')+' (hidden)');
       document.getElementById('info-heap').textContent=Math.round(i.free_heap/1024)+' KB';
       document.getElementById('info-fw').textContent=i.firmware_version||'-';
       if(i.eq_supported){document.getElementById('eq-card').style.display='';}

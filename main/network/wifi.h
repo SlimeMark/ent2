@@ -29,6 +29,26 @@ void wifi_get_mac_str(char *mac_str, size_t len);
 bool wifi_is_connected(void);
 
 /**
+ * Get the current WiFi mode
+ * @param mode Output mode
+ * @return ESP_OK on success
+ */
+esp_err_t wifi_get_mode(wifi_mode_t *mode);
+
+/**
+ * Check whether the AP interface is currently active
+ */
+bool wifi_is_ap_active(void);
+
+/**
+ * Get the configured AP SSID
+ * @param ssid Output buffer
+ * @param len Buffer size
+ * @return ESP_OK on success
+ */
+esp_err_t wifi_get_ap_ssid(char *ssid, size_t len);
+
+/**
  * Get current IP address as string
  * @param ip_str Output buffer
  * @param len Buffer size

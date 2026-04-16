@@ -35,6 +35,21 @@ static esp_timer_handle_t s_retry_timer = NULL;
 // Saved AP config from init, used to re-enable AP without duplication
 static wifi_config_t s_ap_config;
 
+static const char *wifi_mode_to_str(wifi_mode_t mode) {
+  switch (mode) {
+  case WIFI_MODE_STA:
+    return "STA";
+  case WIFI_MODE_AP:
+    return "AP";
+  case WIFI_MODE_APSTA:
+    return "APSTA";
+  case WIFI_MODE_NULL:
+    return "OFF";
+  default:
+    return "UNKNOWN";
+  }
+}
+
 static void wifi_select_best_ap(const char *ssid);
 static void scan_and_connect_task(void *arg);
 
@@ -63,12 +78,18 @@ static void schedule_retry(void) {
 static void enable_ap_mode(void) {
   wifi_mode_t mode;
   if (esp_wifi_get_mode(&mode) == ESP_OK && mode != WIFI_MODE_APSTA) {
-    ESP_LOGI(TAG, "Re-enabling AP mode for configuration access");
+    ESP_LOGI(TAG, "Re-enabling AP mode for configuration access (SSID=%s)",
+             s_ap_config.ap.ssid);
     if (!s_ap_netif) {
       s_ap_netif = esp_netif_create_default_wifi_ap();
     }
-    esp_wifi_set_mode(WIFI_MODE_APSTA);
-    esp_wifi_set_config(WIFI_IF_AP, &s_ap_config);
+    esp_err_t err = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (err == ESP_OK) {
+      err = esp_wifi_set_config(WIFI_IF_AP, &s_ap_config);
+    }
+    if (err != ESP_OK) {
+      ESP_LOGW(TAG, "Failed to re-enable AP mode: %s", esp_err_to_name(err));
+    }
   }
 }
 
@@ -114,11 +135,16 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     // Disable AP mode when STA connects
     wifi_mode_t mode;
     if (esp_wifi_get_mode(&mode) == ESP_OK && mode == WIFI_MODE_APSTA) {
-      ESP_LOGI(TAG, "STA connected, disabling AP mode");
-      esp_wifi_set_mode(WIFI_MODE_STA);
+      ESP_LOGI(TAG, "STA connected, disabling AP mode (SSID=%s)",
+               s_ap_config.ap.ssid);
+      esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
+      if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Failed to disable AP mode: %s", esp_err_to_name(err));
+      }
     }
   } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_AP_START) {
-    ESP_LOGI(TAG, "AP started");
+    ESP_LOGI(TAG, "AP started (SSID=%s, channel=%d)", s_ap_config.ap.ssid,
+             s_ap_config.ap.channel);
   }
 }
 
@@ -291,9 +317,13 @@ void wifi_init_apsta(const char *ap_ssid, const char *ap_password) {
   ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &s_ap_config));
   ESP_ERROR_CHECK(esp_wifi_start());
 
-  ESP_LOGI(TAG, "AP+STA mode started: AP SSID=%s", default_ssid);
+  ESP_LOGI(TAG, "AP+STA mode started: AP SSID=%s, mode=%s", default_ssid,
+           wifi_mode_to_str(WIFI_MODE_APSTA));
   if (has_credentials) {
     ESP_LOGI(TAG, "Connecting to WiFi: %s", ssid);
+  } else {
+    ESP_LOGI(TAG, "No saved WiFi credentials; AP will remain available until"
+                 " configuration is saved");
   }
 }
 
@@ -326,6 +356,38 @@ void wifi_get_mac_str(char *mac_str, size_t len) {
 
 bool wifi_is_connected(void) {
   return s_sta_connected;
+}
+
+esp_err_t wifi_get_mode(wifi_mode_t *mode) {
+  if (!mode) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  return esp_wifi_get_mode(mode);
+}
+
+bool wifi_is_ap_active(void) {
+  wifi_mode_t mode;
+  if (esp_wifi_get_mode(&mode) != ESP_OK) {
+    return false;
+  }
+  return mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA;
+}
+
+esp_err_t wifi_get_ap_ssid(char *ssid, size_t len) {
+  if (!ssid || len == 0) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (s_ap_config.ap.ssid_len == 0) {
+    ssid[0] = '\0';
+    return ESP_ERR_NOT_FOUND;
+  }
+  size_t copy_len = s_ap_config.ap.ssid_len;
+  if (copy_len >= len) {
+    copy_len = len - 1;
+  }
+  memcpy(ssid, s_ap_config.ap.ssid, copy_len);
+  ssid[copy_len] = '\0';
+  return ESP_OK;
 }
 
 esp_err_t wifi_get_ip_str(char *ip_str, size_t len) {
@@ -407,6 +469,9 @@ esp_err_t wifi_scan(wifi_ap_record_t **ap_list, uint16_t *ap_count) {
 
 void wifi_stop(void) {
   if (s_wifi_initialized) {
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    ESP_ERROR_CHECK_WITHOUT_ABORT(esp_wifi_get_mode(&mode));
+    ESP_LOGI(TAG, "Stopping WiFi (current mode=%s)", wifi_mode_to_str(mode));
     esp_timer_stop(s_retry_timer);
     esp_wifi_stop();
     esp_wifi_deinit();

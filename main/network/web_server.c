@@ -30,6 +30,21 @@ static httpd_handle_t s_server = NULL;
 
 #define SPIFFS_CHUNK_SIZE 1024
 
+static const char *wifi_mode_to_str(wifi_mode_t mode) {
+  switch (mode) {
+  case WIFI_MODE_STA:
+    return "STA";
+  case WIFI_MODE_AP:
+    return "AP";
+  case WIFI_MODE_APSTA:
+    return "APSTA";
+  case WIFI_MODE_NULL:
+    return "OFF";
+  default:
+    return "UNKNOWN";
+  }
+}
+
 static esp_err_t serve_spiffs_file(httpd_req_t *req, const char *path,
                                    const char *content_type) {
   FILE *f = fopen(path, "r");
@@ -254,8 +269,12 @@ static esp_err_t system_info_handler(httpd_req_t *req) {
   char ip_str[16] = {0};
   char mac_str[18] = {0};
   char device_name[65] = {0};
+  char wifi_mode_str[16] = {0};
+  char ap_ssid[33] = {0};
   bool wifi_connected = wifi_is_connected();
   bool eth_connected = ethernet_is_connected();
+  bool ap_active = wifi_is_ap_active();
+  wifi_mode_t wifi_mode = WIFI_MODE_NULL;
 
   // Show IP and MAC for the active interface
   if (eth_connected) {
@@ -266,12 +285,24 @@ static esp_err_t system_info_handler(httpd_req_t *req) {
     wifi_get_mac_str(mac_str, sizeof(mac_str));
   }
   settings_get_device_name(device_name, sizeof(device_name));
+  if (wifi_get_mode(&wifi_mode) == ESP_OK) {
+    snprintf(wifi_mode_str, sizeof(wifi_mode_str), "%s",
+             wifi_mode_to_str(wifi_mode));
+  } else {
+    snprintf(wifi_mode_str, sizeof(wifi_mode_str), "UNKNOWN");
+  }
+  if (wifi_get_ap_ssid(ap_ssid, sizeof(ap_ssid)) != ESP_OK) {
+    ap_ssid[0] = '\0';
+  }
 
   cJSON_AddStringToObject(info, "ip", ip_str);
   cJSON_AddStringToObject(info, "mac", mac_str);
   cJSON_AddStringToObject(info, "device_name", device_name);
   cJSON_AddBoolToObject(info, "wifi_connected", wifi_connected);
   cJSON_AddBoolToObject(info, "eth_connected", eth_connected);
+  cJSON_AddBoolToObject(info, "ap_active", ap_active);
+  cJSON_AddStringToObject(info, "wifi_mode", wifi_mode_str);
+  cJSON_AddStringToObject(info, "ap_ssid", ap_ssid);
   cJSON_AddNumberToObject(info, "free_heap", esp_get_free_heap_size());
   const esp_app_desc_t *app_desc = esp_app_get_description();
   cJSON_AddStringToObject(info, "firmware_version", app_desc->version);
