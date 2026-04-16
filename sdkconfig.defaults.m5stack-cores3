@@ -1,0 +1,61 @@
+# M5Stack CoreS3 Specific Configuration
+
+# ==================== Board Selection ====================
+CONFIG_BOARD_M5STACK_CORES3=y
+# CONFIG_BOARD_ESP32S3_GENERIC is not set
+CONFIG_BOARD_TARGET_PATH="m5stack-cores3"
+
+# ==================== PSRAM Configuration ====================
+# CoreS3 uses QUAD SPI for PSRAM (not octal)
+CONFIG_SPIRAM_MODE_QUAD=y
+# CONFIG_SPIRAM_MODE_OCT is not set
+
+# ==================== I2S Audio Output Pins ====================
+# CoreS3 Audio Chain: I2S -> AW88298 Class-D Amp -> 1W Speaker
+# I2S Pins (must match CoreS3 hardware):
+# - BCK (Bit Clock): GPIO34
+# - WS (Word Select): GPIO33  
+# - DOUT (Data Out): GPIO14
+# - MCLK (Master Clock): GPIO0
+CONFIG_I2S_BCK_IO=34
+CONFIG_I2S_WS_IO=33
+CONFIG_I2S_DO_IO=14
+CONFIG_I2S_SCK_IO=0
+
+# ==================== I2C Control Pins ====================
+# Shared I2C bus for all control devices:
+# - AW88298 DAC/Amp (0x36)
+# - AW9523B IO Expander for RST control (0x58)
+# - SDA: GPIO12
+# - SCL: GPIO11
+CONFIG_DAC_I2C_SDA=12
+CONFIG_DAC_I2C_SCL=11
+
+# ==================== Speaker/Amplifier Configuration ====================
+# No external I2C DAC; AW88298 is integrated via AW9523B GPIO control
+# Disable unused I2S outputs
+# CONFIG_I2S_SPDIF_DO_IO is not set
+# CONFIG_I2S_GND_IO is not set  
+# CONFIG_I2S_VCC_IO is not set
+
+# ==================== Optional Peripherals ====================
+# CoreS3 has no headphone jack detection or external DAC fault GPIO
+CONFIG_JACK_GPIO=-1
+CONFIG_SPKFAULT_GPIO=-1
+CONFIG_MUTE_GPIO=-1
+
+# ==================== LED Configuration ====================
+# CoreS3 uses integrated RGB LED on AW9523B (not GPIO controlled in this implementation)
+CONFIG_LED_STATUS_GPIO=-1
+CONFIG_LED_ERROR_GPIO=-1
+CONFIG_LED_RGB_GPIO=-1
+
+# ==================== Battery Monitoring ====================
+# CoreS3 has internal battery monitoring (AXP192/AXP2101)
+CONFIG_BAT_CHANNEL=-1
+
+# ==================== Wireless & Network ====================
+# Standard ESP32-S3 WiFi/BLE configuration (inherited from esp32s3 defaults)
+CONFIG_ESP_WIFI_ENABLED=y
+CONFIG_BT_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BLE_ONLY=y

@@ -1,0 +1,20 @@
+---
+# Clang configuration for ESP-IDF CoreS3 firmware
+CompileFlags:
+  Add:
+    - '-I/Users/mac/Desktop/ent2/main'
+    - '-I/Users/mac/Desktop/ent2/components'
+    - '-I/Users/mac/Desktop/ent2/components/boards'
+    - '-I/Users/mac/Desktop/ent2/components/dac/include'
+    - '-I/Users/mac/Desktop/ent2/components/board_utils'
+    - '-I/Users/mac/Desktop/ent2/components/audio-resampler'
+    - '-I/Users/mac/Desktop/ent2/components/esp_audio_codec/include'
+    - '-I/Users/mac/Desktop/ent2/components/libsodium/libsodium/src/libsodium/include'
+
+InlayHints:
+  Enabled: true
+
+---
+# Index configuration
+Index:
+  Background: Build

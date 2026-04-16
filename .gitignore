@@ -1,6 +1,20 @@
+# Build/cache artifacts
 .pio/
-.vscode/
-
-.DS_Store
-.trae/
+.cache/
 compile_commands.json
+managed_components/
+
+# Local IDE/tooling
+.vscode/
+.trae/
+
+# macOS
+.DS_Store
+
+# ESP-IDF generated config
+sdkconfig
+sdkconfig.*
+!sdkconfig.defaults*
+
+# Optional local override for PlatformIO
+user_platformio.ini
