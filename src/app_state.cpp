@@ -45,15 +45,15 @@ const char* conversationStateLabel(ConversationState state) {
     case ConversationState::Idle:
       return "Idle";
     case ConversationState::Armed:
-      return "WaitingVoice";
+      return "Listening";
     case ConversationState::Recording:
       return "Recording";
     case ConversationState::Uploading:
-      return "Uploading";
+      return "Recognizing";
     case ConversationState::WaitingResponse:
-      return "Waiting";
+      return "Thinking";
     case ConversationState::Playing:
-      return "Playing";
+      return "Speaking";
     case ConversationState::Error:
       return "Error";
   }

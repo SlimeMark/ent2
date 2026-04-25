@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <inttypes.h>
 
 namespace app {
 
@@ -156,14 +157,17 @@ bool NetworkClient::uploadAudio(AudioUploadItem* item) {
   }
 
   String audioBase64;
+  const uint32_t encodeStartMs = millis();
   if (!base64Encode(reinterpret_cast<const uint8_t*>(item->samples),
                     item->sampleCount * sizeof(int16_t), audioBase64)) {
     appState_.setError("Base64 encode failed");
     freeAudioUploadItem(item);
     return false;
   }
+  const uint32_t encodeDurationMs = millis() - encodeStartMs;
 
   String requestBody = buildRequestBody(audioBase64, item->sampleRate);
+  const unsigned requestBytes = static_cast<unsigned>(requestBody.length());
   freeAudioUploadItem(item);
 
   HTTPClient http;
@@ -179,6 +183,7 @@ bool NetworkClient::uploadAudio(AudioUploadItem* item) {
 
   Serial.printf("[NET] POST %s\n", AppConfig::SERVER_URL);
   appState_.setConversationState(ConversationState::Uploading);
+  const uint32_t httpStartMs = millis();
   const int httpCode = http.POST(requestBody);
   if (httpCode <= 0) {
     Serial.printf("[NET] POST failed code=%d\n", httpCode);
@@ -189,17 +194,22 @@ bool NetworkClient::uploadAudio(AudioUploadItem* item) {
 
   appState_.setConversationState(ConversationState::WaitingResponse);
   const String payload = http.getString();
-  Serial.printf("[NET] response code=%d bytes=%u\n", httpCode,
-                static_cast<unsigned>(payload.length()));
+  const uint32_t httpDurationMs = millis() - httpStartMs;
+  const unsigned responseBytes = static_cast<unsigned>(payload.length());
+  Serial.printf("[NET] response code=%d bytes=%u\n", httpCode, responseBytes);
   http.end();
 
   String asrText;
   String assistantText;
   PlaybackItem* playback = nullptr;
+  const uint32_t parseStartMs = millis();
   if (!parseResponse(payload, asrText, assistantText, playback)) {
     appState_.setError("Response parse failed");
     return false;
   }
+  const uint32_t parseDurationMs = millis() - parseStartMs;
+  const unsigned playbackBytes =
+      playback != nullptr ? static_cast<unsigned>(playback->size) : 0U;
 
   if (!asrText.isEmpty()) {
     history_.addMessage(MessageRole::User, asrText);
@@ -223,6 +233,11 @@ bool NetworkClient::uploadAudio(AudioUploadItem* item) {
     appState_.returnToStandbyState();
   }
 
+  Serial.printf(
+      "[NET] timing b64=%" PRIu32 "ms http=%" PRIu32 "ms parse=%" PRIu32
+      "ms req=%uB resp=%uB playback=%uB\n",
+      encodeDurationMs, httpDurationMs, parseDurationMs, requestBytes,
+      responseBytes, playbackBytes);
   appState_.clearError();
   return true;
 }

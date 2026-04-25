@@ -18,6 +18,22 @@ constexpr uint16_t kColorError = TFT_RED;
 constexpr uint16_t kColorButtonStart = 0x3E98;
 constexpr uint16_t kColorButtonPause = 0xD145;
 
+size_t utf8CharLength(uint8_t leadByte) {
+  if ((leadByte & 0x80U) == 0) {
+    return 1;
+  }
+  if ((leadByte & 0xE0U) == 0xC0U) {
+    return 2;
+  }
+  if ((leadByte & 0xF0U) == 0xE0U) {
+    return 3;
+  }
+  if ((leadByte & 0xF8U) == 0xF0U) {
+    return 4;
+  }
+  return 1;
+}
+
 }  // namespace
 
 void UIManager::startTask() {
@@ -31,7 +47,7 @@ void UIManager::taskEntry(void* arg) {
 void UIManager::taskLoop() {
   M5.Display.setRotation(1);
   M5.Display.fillScreen(kColorBg);
-  M5.Display.setTextFont(1);
+  M5.Display.setFont(&fonts::efontCN_16);
   M5.Display.setTextSize(1);
 
   while (true) {
@@ -50,9 +66,13 @@ void UIManager::handleTouch() {
   const auto touch = M5.Touch.getDetail(0);
 
   if (touch.isDragging() && inMessageArea(touch.x, touch.y)) {
+    const int previousScrollOffset = scrollOffset_;
     scrollOffset_ -= touch.deltaY();
     scrollOffset_ = std::max(0, std::min(scrollOffset_, maxScroll_));
     autoScrollToBottom_ = false;
+    if (scrollOffset_ != previousScrollOffset) {
+      forceRedraw_ = true;
+    }
   }
 
   if (touch.wasClicked() && inButtonArea(touch.x, touch.y)) {
@@ -65,26 +85,34 @@ void UIManager::drawFrame() {
   if (messages.size() != lastMessageCount_) {
     lastMessageCount_ = messages.size();
     autoScrollToBottom_ = true;
+    forceRedraw_ = true;
   }
 
   const String wifiLabel = appState_.getWifiLabel();
   const String errorLabel = appState_.getError();
+  const ConversationState state = appState_.getConversationState();
+  const bool listening = appState_.isListeningEnabled();
+
+  if (!shouldRedraw(messages, state, wifiLabel, errorLabel, listening)) {
+    return;
+  }
 
   M5.Display.startWrite();
   M5.Display.fillScreen(kColorBg);
-  drawStatusBar(wifiLabel, errorLabel);
+  drawStatusBar(state, wifiLabel, errorLabel);
   drawMessages(messages);
   drawButton();
   M5.Display.endWrite();
+  commitDrawState(messages, state, wifiLabel, errorLabel, listening);
 }
 
-void UIManager::drawStatusBar(const String& wifiLabel, const String& errorLabel) {
+void UIManager::drawStatusBar(ConversationState state, const String& wifiLabel,
+                              const String& errorLabel) {
   M5.Display.fillRect(0, 0, M5.Display.width(), layout_.statusBarHeight,
                       kColorPanel);
   M5.Display.setTextColor(kColorText, kColorPanel);
   M5.Display.setCursor(8, 6);
-  M5.Display.printf("State: %s",
-                    conversationStateLabel(appState_.getConversationState()));
+  M5.Display.printf("State: %s", conversationStateLabel(state));
 
   M5.Display.setCursor(180, 6);
   M5.Display.print(wifiLabel);
@@ -93,6 +121,10 @@ void UIManager::drawStatusBar(const String& wifiLabel, const String& errorLabel)
     M5.Display.setTextColor(kColorError, kColorPanel);
     M5.Display.setCursor(8, 20);
     M5.Display.print(errorLabel);
+  } else if (state == ConversationState::WaitingResponse) {
+    M5.Display.setTextColor(kColorMuted, kColorPanel);
+    M5.Display.setCursor(8, 20);
+    M5.Display.print("Thinking...");
   }
 }
 
@@ -102,8 +134,8 @@ void UIManager::drawMessages(const std::vector<ChatMessage>& messages) {
   const int width = M5.Display.width() - 12;
   const int height =
       M5.Display.height() - layout_.messageTop - layout_.buttonHeight - 10;
-  const int lineHeight = 12;
-  const size_t wrapChars = 34;
+  const int lineHeight = M5.Display.fontHeight() + 2;
+  const int textWidth = width - 24;
 
   M5.Display.fillRoundRect(left, top, width, height, 6, kColorPanel);
 
@@ -118,7 +150,7 @@ void UIManager::drawMessages(const std::vector<ChatMessage>& messages) {
 
   int y = top + 4 - scrollOffset_;
   for (const auto& message : messages) {
-    const auto wrapped = wrapText(message.text, wrapChars);
+    const auto wrapped = wrapText(message.text, textWidth);
     const int bubbleHeight = 18 + static_cast<int>(wrapped.size()) * lineHeight;
     if (y + bubbleHeight < top || y > top + height) {
       y += bubbleHeight + 6;
@@ -140,6 +172,7 @@ void UIManager::drawMessages(const std::vector<ChatMessage>& messages) {
     }
     y += bubbleHeight + 6;
   }
+
 }
 
 void UIManager::drawButton() {
@@ -165,38 +198,169 @@ void UIManager::toggleListening() {
   if (!enable) {
     scrollOffset_ = maxScroll_;
   }
+  forceRedraw_ = true;
 }
 
-std::vector<String> UIManager::wrapText(const String& text,
-                                        size_t maxChars) const {
+bool UIManager::shouldRedraw(const std::vector<ChatMessage>& messages,
+                             ConversationState state, const String& wifiLabel,
+                             const String& errorLabel, bool listening) const {
+  if (forceRedraw_) {
+    return true;
+  }
+  if (state != lastRenderedState_) {
+    return true;
+  }
+  if (wifiLabel != lastRenderedWifiLabel_) {
+    return true;
+  }
+  if (errorLabel != lastRenderedErrorLabel_) {
+    return true;
+  }
+  if (listening != lastRenderedListening_) {
+    return true;
+  }
+  if (scrollOffset_ != lastRenderedScrollOffset_) {
+    return true;
+  }
+  return !messagesEqual(messages, lastRenderedMessages_);
+}
+
+bool UIManager::messagesEqual(const std::vector<ChatMessage>& lhs,
+                              const std::vector<ChatMessage>& rhs) const {
+  if (lhs.size() != rhs.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < lhs.size(); ++i) {
+    if (lhs[i].role != rhs[i].role || lhs[i].text != rhs[i].text ||
+        lhs[i].timestamp != rhs[i].timestamp) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void UIManager::commitDrawState(const std::vector<ChatMessage>& messages,
+                                ConversationState state, const String& wifiLabel,
+                                const String& errorLabel, bool listening) {
+  lastRenderedMessages_ = messages;
+  lastRenderedState_ = state;
+  lastRenderedWifiLabel_ = wifiLabel;
+  lastRenderedErrorLabel_ = errorLabel;
+  lastRenderedListening_ = listening;
+  lastRenderedScrollOffset_ = scrollOffset_;
+  forceRedraw_ = false;
+}
+
+std::vector<String> UIManager::wrapText(const String& text, int maxWidth) const {
   std::vector<String> lines;
   String normalized = text;
   normalized.replace("\r", "");
 
-  int start = 0;
-  while (start < normalized.length()) {
-    int newline = normalized.indexOf('\n', start);
-    String part =
-        newline >= 0 ? normalized.substring(start, newline) : normalized.substring(start);
-    while (part.length() > static_cast<int>(maxChars)) {
-      int split = static_cast<int>(maxChars);
-      for (int i = split; i > 0; --i) {
-        if (part.charAt(i) == ' ') {
-          split = i;
-          break;
+  String currentLine;
+  String currentToken;
+
+  for (size_t i = 0; i < normalized.length();) {
+    const char ch = normalized.charAt(i);
+    if (ch == '\n') {
+      if (!currentToken.isEmpty()) {
+        const String candidate = currentLine + currentToken;
+        if (!currentLine.isEmpty() && M5.Display.textWidth(candidate) > maxWidth) {
+          lines.push_back(currentLine);
+          currentLine = currentToken;
+        } else {
+          currentLine = candidate;
         }
+        currentToken = "";
       }
-      lines.push_back(part.substring(0, split));
-      while (split < part.length() && part.charAt(split) == ' ') {
-        ++split;
+      lines.push_back(currentLine);
+      currentLine = "";
+      ++i;
+      continue;
+    }
+
+    const size_t charLen = utf8CharLength(static_cast<uint8_t>(ch));
+    const String glyph = normalized.substring(i, i + charLen);
+    i += charLen;
+
+    if (ch == ' ') {
+      currentToken += glyph;
+      const String candidate = currentLine + currentToken;
+      if (!currentLine.isEmpty() && M5.Display.textWidth(candidate) > maxWidth) {
+        lines.push_back(currentLine);
+        currentLine = currentToken;
+      } else {
+        currentLine = candidate;
       }
-      part = part.substring(split);
+      currentToken = "";
+      continue;
     }
-    lines.push_back(part);
-    if (newline < 0) {
-      break;
+
+    currentToken += glyph;
+    const String candidate = currentLine + currentToken;
+    if (M5.Display.textWidth(candidate) <= maxWidth) {
+      continue;
     }
-    start = newline + 1;
+
+    if (!currentLine.isEmpty()) {
+      lines.push_back(currentLine);
+      currentLine = "";
+      while (!currentToken.isEmpty() && M5.Display.textWidth(currentToken) > maxWidth) {
+        size_t split = 0;
+        String partial;
+        while (split < currentToken.length()) {
+          const size_t partLen =
+              utf8CharLength(static_cast<uint8_t>(currentToken.charAt(split)));
+          const String next = partial + currentToken.substring(split, split + partLen);
+          if (!partial.isEmpty() && M5.Display.textWidth(next) > maxWidth) {
+            break;
+          }
+          partial = next;
+          split += partLen;
+        }
+        if (partial.isEmpty()) {
+          partial = currentToken;
+          split = currentToken.length();
+        }
+        lines.push_back(partial);
+        currentToken = currentToken.substring(split);
+      }
+      continue;
+    }
+
+    size_t split = 0;
+    String partial;
+    while (split < currentToken.length()) {
+      const size_t partLen =
+          utf8CharLength(static_cast<uint8_t>(currentToken.charAt(split)));
+      const String next = partial + currentToken.substring(split, split + partLen);
+      if (!partial.isEmpty() && M5.Display.textWidth(next) > maxWidth) {
+        break;
+      }
+      partial = next;
+      split += partLen;
+    }
+
+    if (partial.isEmpty()) {
+      partial = currentToken;
+      split = currentToken.length();
+    }
+
+    lines.push_back(partial);
+    currentToken = currentToken.substring(split);
+  }
+
+  if (!currentToken.isEmpty()) {
+    const String candidate = currentLine + currentToken;
+    if (!currentLine.isEmpty() && M5.Display.textWidth(candidate) > maxWidth) {
+      lines.push_back(currentLine);
+      currentLine = currentToken;
+    } else {
+      currentLine = candidate;
+    }
+  }
+
+  if (!currentLine.isEmpty()) {
+    lines.push_back(currentLine);
   }
 
   if (lines.empty()) {
@@ -207,9 +371,12 @@ std::vector<String> UIManager::wrapText(const String& text,
 
 int UIManager::calculateContentHeight(
     const std::vector<ChatMessage>& messages) const {
+  const int width = M5.Display.width() - 12;
+  const int textWidth = width - 24;
+  const int lineHeight = M5.Display.fontHeight() + 2;
   int total = 0;
   for (const auto& message : messages) {
-    total += 18 + static_cast<int>(wrapText(message.text, 34).size()) * 12 + 6;
+    total += 18 + static_cast<int>(wrapText(message.text, textWidth).size()) * lineHeight + 6;
   }
   return total;
 }

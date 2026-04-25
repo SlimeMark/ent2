@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <inttypes.h>
 
 namespace app {
 
@@ -61,6 +62,7 @@ void AudioCapture::taskLoop() {
         micEnabled = false;
       }
       recordedSamples = 0;
+      lastVoiceMs = 0;
       recordingStartedMs = 0;
       if (!listeningEnabled &&
           (state == ConversationState::Armed || state == ConversationState::Recording)) {
@@ -117,6 +119,8 @@ void AudioCapture::taskLoop() {
       Serial.println("[CAPTURE] max recording buffer reached");
       finalizeRecording(recordedSamples, workingBuffer);
       recordedSamples = 0;
+      lastVoiceMs = 0;
+      recordingStartedMs = 0;
       continue;
     }
 
@@ -125,15 +129,22 @@ void AudioCapture::taskLoop() {
     } else if (now - lastVoiceMs >= AppConfig::SILENCE_TIMEOUT_MS) {
       const uint32_t recordingMs = now - recordingStartedMs;
       if (recordingMs >= AppConfig::MIN_RECORDING_MS) {
-        Serial.printf("[CAPTURE] utterance end after %u ms silence, recorded=%u ms\n",
-                      AppConfig::SILENCE_TIMEOUT_MS, recordingMs);
+        Serial.printf(
+            "[CAPTURE] utterance end duration=%" PRIu32
+            "ms silence=%" PRIu32 "ms samples=%u\n",
+            recordingMs, AppConfig::SILENCE_TIMEOUT_MS,
+            static_cast<unsigned>(recordedSamples));
         finalizeRecording(recordedSamples, workingBuffer);
       } else {
-        Serial.printf("[CAPTURE] dropped short recording=%u ms rms=%" PRIu32 "\n",
-                      recordingMs, rms);
+        Serial.printf(
+            "[CAPTURE] dropped short recording duration=%" PRIu32
+            "ms min=%" PRIu32 "ms samples=%u\n",
+            recordingMs, AppConfig::MIN_RECORDING_MS,
+            static_cast<unsigned>(recordedSamples));
         appState_.setConversationState(ConversationState::Armed);
       }
       recordedSamples = 0;
+      lastVoiceMs = 0;
       recordingStartedMs = 0;
     }
   }
@@ -191,6 +202,13 @@ void AudioCapture::finalizeRecording(size_t sampleCount, int16_t* workingBuffer)
     return;
   }
 
+  const uint32_t durationMs =
+      static_cast<uint32_t>((sampleCount * 1000ULL) / AppConfig::AUDIO_SAMPLE_RATE);
+  const size_t pcmBytes = sampleCount * sizeof(int16_t);
+  Serial.printf("[CAPTURE] finalize samples=%u duration=%" PRIu32 "ms pcm=%uB\n",
+                static_cast<unsigned>(sampleCount), durationMs,
+                static_cast<unsigned>(pcmBytes));
+
   auto* item = new AudioUploadItem;
   item->samples = allocPcmSamples(sampleCount);
   item->sampleCount = sampleCount;
@@ -209,10 +227,9 @@ void AudioCapture::finalizeRecording(size_t sampleCount, int16_t* workingBuffer)
     appState_.setError("Upload queue full");
     return;
   }
-  const uint32_t durationMs =
-      static_cast<uint32_t>((sampleCount * 1000ULL) / AppConfig::AUDIO_SAMPLE_RATE);
   Serial.printf("[CAPTURE] queued %u samples (%u ms) for upload\n",
-                static_cast<unsigned>(sampleCount), durationMs);
+                static_cast<unsigned>(sampleCount),
+                static_cast<unsigned>(durationMs));
 }
 
 }  // namespace app
